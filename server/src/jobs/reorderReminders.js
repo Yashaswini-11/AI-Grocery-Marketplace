@@ -1,5 +1,5 @@
 const cron = require('node-cron');
-const Order = require('../models/Order');
+const { prisma } = require('../config/db');
 const { getReorderSuggestions } = require('../services/reorderService');
 const { reminderJobEnabled, reminderCron, reminderTimezone } = require('../config/env');
 
@@ -19,7 +19,8 @@ async function runReminderJob(now = new Date()) {
   running = true;
 
   try {
-    const userIds = await Order.distinct('user');
+    const rows = await prisma.order.findMany({ distinct: ['userId'], select: { userId: true } });
+    const userIds = rows.map((r) => r.userId);
     let notified = 0;
 
     for (const userId of userIds) {

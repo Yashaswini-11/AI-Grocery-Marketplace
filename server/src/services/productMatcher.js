@@ -1,4 +1,5 @@
-const Product = require('../models/Product');
+const { prisma } = require('../config/db');
+const { productSummary } = require('../utils/serializers');
 
 const MATCH_MIN = 0.8; // score needed to auto-match
 const MARGIN = 0.1; // lead needed over the runner-up product
@@ -95,12 +96,13 @@ function scoreTokens(query, term) {
 }
 
 async function loadCatalog() {
-  const products = await Product.find({}).lean();
-  return products.map((product) => ({
-    product,
+  const products = await prisma.product.findMany();
+  return products.map((row) => ({
+    // price is a Decimal in the database; the matcher works with plain numbers
+    product: { ...row, price: Number(row.price) },
     terms: [
-      tokenize(String(product.name).replace(/\([^)]*\)/g, ' ')),
-      ...(product.aliases || []).map(tokenize),
+      tokenize(String(row.name).replace(/\([^)]*\)/g, ' ')),
+      ...(row.aliases || []).map(tokenize),
     ].filter((t) => t.length > 0),
   }));
 }
@@ -179,22 +181,10 @@ function planQuantity(requested, product) {
   return { qty, notes, needsReview };
 }
 
-function toSummary(p) {
-  return {
-    id: p._id.toString(),
-    name: p.name,
-    category: p.category,
-    unit: p.unit,
-    price: p.price,
-    stock: p.stock,
-    imageUrl: p.imageUrl,
-  };
-}
-
 function buildSelection(product, requested) {
   const plan = planQuantity(requested, product);
   return {
-    product: toSummary(product), // price and stock always come from the database
+    product: productSummary(product), // price and stock always come from the database
     quantity: plan.qty,
     lineTotal: round2(product.price * plan.qty),
     notes: plan.notes,

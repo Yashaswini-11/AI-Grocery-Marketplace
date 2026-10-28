@@ -1,17 +1,22 @@
-const dns = require('dns');
-const mongoose = require('mongoose');
-const { mongoUri } = require('./env');
+const { PrismaPg } = require('@prisma/adapter-pg');
+const { PrismaClient, Prisma } = require('@prisma/client');
+const { databaseUrl, databaseSsl } = require('./env');
 
-// Some networks/ISPs block SRV lookups used by mongodb+srv:// URIs.
-// Optional override: set DNS_SERVERS=8.8.8.8,1.1.1.1 in server/.env
-if (process.env.DNS_SERVERS) {
-  dns.setServers(process.env.DNS_SERVERS.split(',').map((s) => s.trim()));
-}
+// One shared client for the whole process (it manages its own connection pool).
+const adapter = new PrismaPg({
+  connectionString: databaseUrl,
+  ...(databaseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+});
+const prisma = new PrismaClient({ adapter });
 
 async function connectDB() {
-  mongoose.set('strictQuery', true);
-  await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 10000 });
-  console.log(`MongoDB connected (database: ${mongoose.connection.name})`);
+  await prisma.$queryRaw`SELECT 1`;
+  const [{ current_database: name }] = await prisma.$queryRaw`SELECT current_database()`;
+  console.log(`PostgreSQL connected (database: ${name})`);
 }
 
-module.exports = connectDB;
+async function disconnectDB() {
+  await prisma.$disconnect();
+}
+
+module.exports = { prisma, Prisma, connectDB, disconnectDB };

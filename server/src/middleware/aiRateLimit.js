@@ -6,7 +6,7 @@ const MAX_REQUESTS = 10;
 const hits = new Map(); // userId -> [timestamps]
 
 module.exports = function aiRateLimit(req, res, next) {
-  const key = req.user._id.toString();
+  const key = req.user.id;
   const now = Date.now();
 
   const recent = (hits.get(key) || []).filter((t) => now - t < WINDOW_MS);

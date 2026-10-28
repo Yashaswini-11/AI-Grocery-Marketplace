@@ -1,7 +1,7 @@
-const mongoose = require('mongoose');
-const Product = require('../models/Product');
+const { prisma } = require('../config/db');
 const HttpError = require('../utils/HttpError');
 const asyncHandler = require('../utils/asyncHandler');
+const { isUuid } = require('../utils/ids');
 const { getCartView, getOrCreateCart } = require('../services/cartService');
 
 const MAX_QTY = 99;
@@ -16,7 +16,7 @@ function parseQuantity(value, fallback) {
 }
 
 function assertValidId(id) {
-  if (!mongoose.isValidObjectId(id)) throw new HttpError(400, 'Invalid product id');
+  if (!isUuid(id)) throw new HttpError(400, 'Invalid product id');
 }
 
 function assertStock(product, qty) {
@@ -31,7 +31,7 @@ function assertStock(product, qty) {
 }
 
 const getCart = asyncHandler(async (req, res) => {
-  const cart = await getCartView(req.user._id);
+  const cart = await getCartView(req.user.id);
   res.json({ success: true, cart });
 });
 
@@ -40,11 +40,12 @@ const addItem = asyncHandler(async (req, res) => {
   assertValidId(productId);
   const qty = parseQuantity(quantity, 1);
 
-  const product = await Product.findById(productId);
+  const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) throw new HttpError(404, 'Product not found');
 
-  const cart = await getOrCreateCart(req.user._id);
-  const existing = cart.items.find((i) => i.product.equals(product._id));
+  const cart = await getOrCreateCart(req.user.id);
+  const key = { cartId_productId: { cartId: cart.id, productId } };
+  const existing = await prisma.cartItem.findUnique({ where: key });
   const newQty = (existing ? existing.quantity : 0) + qty;
 
   if (newQty > MAX_QTY) {
@@ -52,11 +53,13 @@ const addItem = asyncHandler(async (req, res) => {
   }
   assertStock(product, newQty);
 
-  if (existing) existing.quantity = newQty;
-  else cart.items.push({ product: product._id, quantity: qty });
-  await cart.save();
+  await prisma.cartItem.upsert({
+    where: key,
+    update: { quantity: newQty },
+    create: { cartId: cart.id, productId, quantity: qty },
+  });
 
-  res.status(200).json({ success: true, cart: await getCartView(req.user._id) });
+  res.status(200).json({ success: true, cart: await getCartView(req.user.id) });
 });
 
 const updateItem = asyncHandler(async (req, res) => {
@@ -65,31 +68,29 @@ const updateItem = asyncHandler(async (req, res) => {
   if (req.body?.quantity === undefined) throw new HttpError(400, 'Quantity is required');
   const qty = parseQuantity(req.body.quantity);
 
-  const cart = await getOrCreateCart(req.user._id);
-  const existing = cart.items.find((i) => i.product.equals(productId));
+  const cart = await getOrCreateCart(req.user.id);
+  const key = { cartId_productId: { cartId: cart.id, productId } };
+  const existing = await prisma.cartItem.findUnique({ where: key });
   if (!existing) throw new HttpError(404, 'Item is not in your cart');
 
-  const product = await Product.findById(productId);
+  const product = await prisma.product.findUnique({ where: { id: productId } });
   if (!product) throw new HttpError(404, 'Product not found');
   assertStock(product, qty);
 
-  existing.quantity = qty;
-  await cart.save();
+  await prisma.cartItem.update({ where: key, data: { quantity: qty } });
 
-  res.json({ success: true, cart: await getCartView(req.user._id) });
+  res.json({ success: true, cart: await getCartView(req.user.id) });
 });
 
 const removeItem = asyncHandler(async (req, res) => {
   const { productId } = req.params;
   assertValidId(productId);
 
-  const cart = await getOrCreateCart(req.user._id);
-  const before = cart.items.length;
-  cart.items = cart.items.filter((i) => !i.product.equals(productId));
-  if (cart.items.length === before) throw new HttpError(404, 'Item is not in your cart');
-  await cart.save();
+  const cart = await getOrCreateCart(req.user.id);
+  const { count } = await prisma.cartItem.deleteMany({ where: { cartId: cart.id, productId } });
+  if (count === 0) throw new HttpError(404, 'Item is not in your cart');
 
-  res.json({ success: true, cart: await getCartView(req.user._id) });
+  res.json({ success: true, cart: await getCartView(req.user.id) });
 });
 
 module.exports = { getCart, addItem, updateItem, removeItem };

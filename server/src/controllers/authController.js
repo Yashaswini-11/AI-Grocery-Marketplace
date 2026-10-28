@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { prisma } = require('../config/db');
+const { userDto } = require('../utils/serializers');
 const { jwtSecret, jwtExpiresIn } = require('../config/env');
 const HttpError = require('../utils/HttpError');
 const asyncHandler = require('../utils/asyncHandler');
@@ -8,7 +9,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function signToken(user) {
-  return jwt.sign({ sub: user._id.toString() }, jwtSecret, { expiresIn: jwtExpiresIn });
+  return jwt.sign({ sub: user.id }, jwtSecret, { expiresIn: jwtExpiresIn });
 }
 
 const register = asyncHandler(async (req, res) => {
@@ -26,13 +27,13 @@ const register = asyncHandler(async (req, res) => {
     throw new HttpError(400, 'Password must be 8 to 72 characters');
   }
 
-  const existing = await User.findOne({ email: cleanEmail });
+  const existing = await prisma.user.findUnique({ where: { email: cleanEmail } });
   if (existing) throw new HttpError(409, 'An account with this email already exists');
 
   const passwordHash = await bcrypt.hash(password, 10);
-  const user = await User.create({ name: cleanName, email: cleanEmail, passwordHash });
+  const user = await prisma.user.create({ data: { name: cleanName, email: cleanEmail, passwordHash } });
 
-  res.status(201).json({ success: true, token: signToken(user), user });
+  res.status(201).json({ success: true, token: signToken(user), user: userDto(user) });
 });
 
 const login = asyncHandler(async (req, res) => {
@@ -43,11 +44,11 @@ const login = asyncHandler(async (req, res) => {
     throw new HttpError(400, 'Email and password are required');
   }
 
-  const user = await User.findOne({ email: cleanEmail }).select('+passwordHash');
+  const user = await prisma.user.findUnique({ where: { email: cleanEmail } });
   const ok = user ? await bcrypt.compare(password, user.passwordHash) : false;
   if (!ok) throw new HttpError(401, 'Invalid email or password');
 
-  res.json({ success: true, token: signToken(user), user });
+  res.json({ success: true, token: signToken(user), user: userDto(user) });
 });
 
 const me = asyncHandler(async (req, res) => {

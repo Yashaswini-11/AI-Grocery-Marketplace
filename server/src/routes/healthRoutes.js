@@ -1,22 +1,21 @@
 const express = require('express');
-const mongoose = require('mongoose');
+const { prisma } = require('../config/db');
 
 const router = express.Router();
 
-const DB_STATES = {
-  0: 'disconnected',
-  1: 'connected',
-  2: 'connecting',
-  3: 'disconnecting',
-};
-
-router.get('/', (req, res) => {
-  const state = mongoose.connection.readyState;
-  const connected = state === 1;
+// Used by hosting health checks: confirms the API can really reach the database
+router.get('/', async (req, res) => {
+  let connected = false;
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    connected = true;
+  } catch {
+    connected = false;
+  }
 
   res.status(connected ? 200 : 503).json({
     status: connected ? 'ok' : 'degraded',
-    database: DB_STATES[state],
+    database: connected ? 'connected' : 'disconnected',
     uptimeSeconds: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
   });

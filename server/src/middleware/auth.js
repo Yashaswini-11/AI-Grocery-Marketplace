@@ -1,8 +1,10 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { prisma } = require('../config/db');
 const { jwtSecret } = require('../config/env');
 const HttpError = require('../utils/HttpError');
 const asyncHandler = require('../utils/asyncHandler');
+const { isUuid } = require('../utils/ids');
+const { userDto } = require('../utils/serializers');
 
 module.exports = asyncHandler(async (req, res, next) => {
   const header = req.headers.authorization || '';
@@ -19,9 +21,12 @@ module.exports = asyncHandler(async (req, res, next) => {
     throw new HttpError(401, 'Invalid or expired token');
   }
 
-  const user = await User.findById(payload.sub);
+  // Tokens issued before the Postgres migration carry a Mongo ObjectId, not a UUID
+  if (!isUuid(payload.sub)) throw new HttpError(401, 'Invalid or expired token');
+
+  const user = await prisma.user.findUnique({ where: { id: payload.sub } });
   if (!user) throw new HttpError(401, 'User no longer exists');
 
-  req.user = user;
+  req.user = userDto(user);
   next();
 });
