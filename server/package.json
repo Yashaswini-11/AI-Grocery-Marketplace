@@ -4,7 +4,7 @@
   "description": "Express + PostgreSQL (Prisma) API for the AI grocery marketplace",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest --runInBand",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node src/scripts/seed.js",
@@ -37,5 +37,19 @@
   "engines": {
     "node": ">=22.18.0"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFiles": [
+      "./tests/setupEnv.js"
+    ],
+    "testTimeout": 30000,
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  }
 }

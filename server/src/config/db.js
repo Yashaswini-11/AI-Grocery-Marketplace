@@ -2,9 +2,22 @@ const { PrismaPg } = require('@prisma/adapter-pg');
 const { PrismaClient, Prisma } = require('@prisma/client');
 const { databaseUrl, databaseSsl } = require('./env');
 
+// Prisma's migration tool accepts "?sslmode=require" in DATABASE_URL, but the node-postgres driver
+// would then insist on verifying the server certificate. SSL for the app is controlled by
+// DATABASE_SSL instead, so the sslmode parameter is removed before connecting.
+function withoutSslMode(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete('sslmode');
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 // One shared client for the whole process (it manages its own connection pool).
 const adapter = new PrismaPg({
-  connectionString: databaseUrl,
+  connectionString: withoutSslMode(databaseUrl),
   ...(databaseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 const prisma = new PrismaClient({ adapter });
