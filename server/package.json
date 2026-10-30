@@ -1,17 +1,21 @@
 {
   "name": "server",
   "version": "1.0.0",
-  "description": "Express + MongoDB API for the AI grocery marketplace",
+  "description": "Express + PostgreSQL (Prisma) API for the AI grocery marketplace",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest --runInBand",
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "seed": "node src/scripts/seed.js",
     "order-status": "node src/scripts/setOrderStatus.js",
     "ai-check": "node src/scripts/aiCheck.js",
     "seed-history": "node src/scripts/seedHistory.js",
-    "reminders-run": "node src/scripts/runReminders.js"
+    "reminders-run": "node src/scripts/runReminders.js",
+    "postinstall": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
   },
   "keywords": [],
   "author": "",
@@ -19,16 +23,33 @@
   "type": "commonjs",
   "dependencies": {
     "@google/genai": "^2.31.0",
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.8",
     "express": "^5.3.0",
     "jsonwebtoken": "^9.0.3",
-    "mongoose": "^9.11.2",
-    "node-cron": "^4.6.0"
+    "node-cron": "^4.6.0",
+    "pg": "^8.23.1",
+    "prisma": "^7.10.1"
   },
   "engines": {
-    "node": ">=20.9.0"
+    "node": ">=22.18.0"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "jest": "^30.5.2",
+    "supertest": "^7.3.1"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFiles": [
+      "./tests/setupEnv.js"
+    ],
+    "testTimeout": 30000,
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  }
 }

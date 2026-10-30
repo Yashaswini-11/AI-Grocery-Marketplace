@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const required = ['MONGODB_URI', 'JWT_SECRET'];
+const required = ['DATABASE_URL', 'JWT_SECRET'];
 const missing = required.filter((key) => !process.env[key]);
 
 if (missing.length > 0) {
@@ -14,7 +14,9 @@ if (missing.length > 0) {
 module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT) || 5000,
-  mongoUri: process.env.MONGODB_URI,
+  databaseUrl: process.env.DATABASE_URL,
+  // Set DATABASE_SSL=true for managed Postgres such as AWS RDS
+  databaseSsl: (process.env.DATABASE_SSL || '').toLowerCase() === 'true',
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   clientUrl: process.env.CLIENT_URL || 'http://localhost:3000',

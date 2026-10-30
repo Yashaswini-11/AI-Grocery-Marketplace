@@ -11,15 +11,19 @@ function errorHandler(err, req, res, next) {
   let message = err.message;
   const code = err.errorCode; // optional machine-readable code (used by AI errors)
 
-  if (err.name === 'ValidationError') {
-    status = 400;
-    message = Object.values(err.errors).map((e) => e.message).join('; ');
-  } else if (err.name === 'CastError') {
-    status = 400;
-    message = 'Invalid identifier';
-  } else if (err.code === 11000) {
+  if (err.code === 'P2002') {
+    // Prisma: unique constraint violated
     status = 409;
     message = 'A record with that value already exists';
+  } else if (err.code === 'P2025') {
+    status = 404;
+    message = 'Record not found';
+  } else if (err.code === 'P2003') {
+    status = 409;
+    message = 'This record is still referenced by other data';
+  } else if (err.code === 'P2023') {
+    status = 400;
+    message = 'Invalid identifier';
   } else if (err.type === 'entity.parse.failed') {
     status = 400;
     message = 'Request body is not valid JSON';

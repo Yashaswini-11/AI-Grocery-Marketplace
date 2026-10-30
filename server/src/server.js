@@ -1,6 +1,5 @@
-const mongoose = require('mongoose');
 const { port } = require('./config/env');
-const connectDB = require('./config/db');
+const { connectDB, disconnectDB } = require('./config/db');
 const app = require('./app');
 const { startReminderJob } = require('./jobs/reorderReminders');
 
@@ -8,7 +7,7 @@ async function start() {
   try {
     await connectDB();
   } catch (err) {
-    console.error('Failed to connect to MongoDB:', err.message);
+    console.error('Failed to connect to PostgreSQL:', err.message);
     process.exit(1);
   }
 
@@ -26,7 +25,7 @@ async function start() {
     if (reminderTask) reminderTask.stop();
     server.close(async () => {
       try {
-        await mongoose.connection.close();
+        await disconnectDB();
       } finally {
         process.exit(0);
       }

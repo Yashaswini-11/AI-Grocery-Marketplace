@@ -1,8 +1,6 @@
-const mongoose = require('mongoose');
-const Cart = require('../models/Cart');
-const Product = require('../models/Product');
-const Order = require('../models/Order');
+const { prisma } = require('../config/db');
 const HttpError = require('../utils/HttpError');
+const { orderDto, ORDER_INCLUDE } = require('../utils/serializers');
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -38,93 +36,108 @@ function validateDelivery(raw) {
   return { fullName, phone, line1, line2, city, state, pincode };
 }
 
-// Creates an order from the user's cart. Everything happens in one transaction:
-// stock is decremented, the order is saved and the cart is cleared, or none of it happens.
+// Creates an order from the user's cart. Everything happens in one database transaction:
+// stock is decremented, the order and its items are saved and the cart is emptied, or none of it happens.
 async function placeOrder(userId, rawDelivery, idempotencyKey) {
   const delivery = validateDelivery(rawDelivery);
 
+  const findExisting = () =>
+    prisma.order.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey } },
+      include: ORDER_INCLUDE,
+    });
+
   if (idempotencyKey) {
-    const existing = await Order.findOne({ user: userId, idempotencyKey });
-    if (existing) return { order: existing, created: false };
+    const existing = await findExisting();
+    if (existing) return { order: orderDto(existing), created: false };
   }
 
-  const session = await mongoose.startSession();
-  let order;
-
   try {
-    await session.withTransaction(async () => {
-      const cart = await Cart.findOne({ user: userId }).session(session);
-      if (!cart || cart.items.length === 0) throw new HttpError(400, 'Your cart is empty');
+    const order = await prisma.$transaction(
+      async (tx) => {
+        const cart = await tx.cart.findUnique({ where: { userId } });
+        const lines = cart ? await tx.cartItem.findMany({ where: { cartId: cart.id } }) : [];
+        if (lines.length === 0) throw new HttpError(400, 'Your cart is empty');
 
-      const items = [];
+        // Always lock products in the same order, so two checkouts that share items
+        // cannot wait on each other forever (deadlock).
+        lines.sort((a, b) => (a.productId < b.productId ? -1 : 1));
 
-      for (const line of cart.items) {
-        // Atomic: only decrements when enough stock exists
-        const product = await Product.findOneAndUpdate(
-          { _id: line.product, stock: { $gte: line.quantity } },
-          { $inc: { stock: -line.quantity } },
-          { returnDocument: 'after', session }
-        );
+        const items = [];
 
-        if (!product) {
-          const current = await Product.findById(line.product).session(session);
-          if (!current) {
+        for (const line of lines) {
+          // Atomic: the row is only changed when enough stock exists. Postgres locks the row
+          // for the rest of the transaction, so a concurrent buyer waits and then re-checks.
+          const { count } = await tx.product.updateMany({
+            where: { id: line.productId, stock: { gte: line.quantity } },
+            data: { stock: { decrement: line.quantity } },
+          });
+
+          if (count === 0) {
+            const current = await tx.product.findUnique({ where: { id: line.productId } });
+            if (!current) {
+              throw new HttpError(
+                409,
+                'An item in your cart is no longer available. Please review your cart.'
+              );
+            }
             throw new HttpError(
               409,
-              'An item in your cart is no longer available. Please review your cart.'
+              current.stock === 0
+                ? `${current.name} is out of stock`
+                : `Only ${current.stock} ${current.unit} of ${current.name} available`
             );
           }
-          throw new HttpError(
-            409,
-            current.stock === 0
-              ? `${current.name} is out of stock`
-              : `Only ${current.stock} ${current.unit} of ${current.name} available`
-          );
+
+          const product = await tx.product.findUnique({ where: { id: line.productId } });
+          const unitPrice = Number(product.price);
+          items.push({
+            productId: product.id,
+            name: product.name,
+            unit: product.unit,
+            unitPrice,
+            quantity: line.quantity,
+            lineTotal: round2(unitPrice * line.quantity),
+          });
         }
 
-        items.push({
-          product: product._id,
-          name: product.name,
-          unit: product.unit,
-          price: product.price,
-          quantity: line.quantity,
-          lineTotal: round2(product.price * line.quantity),
-        });
-      }
+        const totalAmount = round2(items.reduce((sum, i) => sum + i.lineTotal, 0));
 
-      const totalAmount = round2(items.reduce((sum, i) => sum + i.lineTotal, 0));
-
-      const [created] = await Order.create(
-        [
-          {
-            user: userId,
-            items,
+        const created = await tx.order.create({
+          data: {
+            userId,
             totalAmount,
-            delivery,
             paymentMethod: 'COD',
             paymentStatus: 'Pending',
             status: 'Placed',
-            idempotencyKey: idempotencyKey || undefined,
+            idempotencyKey: idempotencyKey || null,
+            deliveryFullName: delivery.fullName,
+            deliveryPhone: delivery.phone,
+            deliveryLine1: delivery.line1,
+            deliveryLine2: delivery.line2,
+            deliveryCity: delivery.city,
+            deliveryState: delivery.state,
+            deliveryPincode: delivery.pincode,
+            items: { create: items },
           },
-        ],
-        { session }
-      );
+          include: ORDER_INCLUDE,
+        });
 
-      await Cart.updateOne({ _id: cart._id }, { $set: { items: [] } }, { session });
-      order = created;
-    });
+        await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+        return created;
+      },
+      { maxWait: 5000, timeout: 15000 }
+    );
+
+    return { order: orderDto(order), created: true };
   } catch (err) {
-    // Same key submitted twice at the same moment: return the winner, stock was rolled back
-    if (err.code === 11000 && idempotencyKey) {
-      const existing = await Order.findOne({ user: userId, idempotencyKey });
-      if (existing) return { order: existing, created: false };
+    // Same key submitted twice at the same moment: return the winner, this attempt was rolled back
+    if (err.code === 'P2002' && idempotencyKey) {
+      const existing = await findExisting();
+      if (existing) return { order: orderDto(existing), created: false };
     }
     throw err;
-  } finally {
-    await session.endSession();
   }
-
-  return { order, created: true };
 }
 
 module.exports = { placeOrder };

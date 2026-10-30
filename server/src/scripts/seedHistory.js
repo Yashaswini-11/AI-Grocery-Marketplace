@@ -1,9 +1,5 @@
-const mongoose = require('mongoose');
 require('../config/env');
-const connectDB = require('../config/db');
-const User = require('../models/User');
-const Product = require('../models/Product');
-const Order = require('../models/Order');
+const { prisma, connectDB, disconnectDB } = require('../config/db');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const KEY_PREFIX = 'demo-history-';
@@ -30,72 +26,75 @@ async function run() {
 
   await connectDB();
 
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
   if (!user) {
     console.error(`No user with email ${email}`);
-    await mongoose.disconnect();
+    await disconnectDB();
     process.exit(1);
   }
 
-  const removed = await Order.deleteMany({
-    user: user._id,
-    idempotencyKey: { $regex: `^${KEY_PREFIX}` },
+  // order_items are removed with their orders (ON DELETE CASCADE)
+  const removed = await prisma.order.deleteMany({
+    where: { userId: user.id, idempotencyKey: { startsWith: KEY_PREFIX } },
   });
-  console.log(`Removed ${removed.deletedCount} existing demo order(s)`);
+  console.log(`Removed ${removed.count} existing demo order(s)`);
 
   if (!clearOnly) {
     let n = 0;
     for (const item of PLAN) {
-      const product = await Product.findOne({ name: item.name });
+      const product = await prisma.product.findUnique({ where: { name: item.name } });
       if (!product) {
         console.warn(`Skipping "${item.name}": not in catalog`);
         continue;
       }
 
+      const unitPrice = Number(product.price);
+
       for (const daysAgo of item.daysAgo) {
         const date = new Date(Date.now() - daysAgo * DAY_MS);
-        const lineTotal = round2(product.price * item.quantity);
+        const lineTotal = round2(unitPrice * item.quantity);
         n += 1;
 
-        const order = await Order.create({
-          user: user._id,
-          items: [
-            {
-              product: product._id,
-              name: product.name,
-              unit: product.unit,
-              price: product.price,
-              quantity: item.quantity,
-              lineTotal,
+        await prisma.order.create({
+          data: {
+            userId: user.id,
+            totalAmount: lineTotal,
+            deliveryFullName: user.name,
+            deliveryPhone: '9876543210',
+            deliveryLine1: '12, MG Road',
+            deliveryCity: 'Bengaluru',
+            deliveryState: 'Karnataka',
+            deliveryPincode: '560001',
+            paymentMethod: 'COD',
+            paymentStatus: 'Paid',
+            status: 'Delivered',
+            idempotencyKey: `${KEY_PREFIX}${n}`,
+            createdAt: date, // backdated so the reorder prediction has history
+            updatedAt: date,
+            items: {
+              create: [
+                {
+                  productId: product.id,
+                  name: product.name,
+                  unit: product.unit,
+                  unitPrice,
+                  quantity: item.quantity,
+                  lineTotal,
+                },
+              ],
             },
-          ],
-          totalAmount: lineTotal,
-          delivery: {
-            fullName: user.name,
-            phone: '9876543210',
-            line1: '12, MG Road',
-            city: 'Bengaluru',
-            state: 'Karnataka',
-            pincode: '560001',
           },
-          paymentMethod: 'COD',
-          paymentStatus: 'Paid',
-          status: 'Delivered',
-          idempotencyKey: `${KEY_PREFIX}${n}`,
         });
-
-        // Backdate (bypasses Mongoose timestamps)
-        await Order.collection.updateOne({ _id: order._id }, { $set: { createdAt: date, updatedAt: date } });
       }
     }
     console.log(`Created ${n} demo order(s) for ${user.email}`);
   }
 
-  await mongoose.disconnect();
+  await disconnectDB();
 }
 
 run().catch(async (err) => {
   console.error('Failed:', err.message);
-  await mongoose.disconnect();
+  await disconnectDB();
   process.exit(1);
 });

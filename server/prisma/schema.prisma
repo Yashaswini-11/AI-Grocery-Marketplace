@@ -1,0 +1,153 @@
+// Schema for the FreshCart grocery marketplace (PostgreSQL).
+// Mongo's embedded documents (cart.items, order.items, order.delivery) are now real tables / columns.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Category {
+  Fruits
+  Vegetables
+  Dairy
+  Grains
+  Snacks
+  Household
+}
+
+enum Unit {
+  kg
+  g
+  litre
+  ml
+  piece
+}
+
+enum PaymentMethod {
+  COD
+}
+
+enum PaymentStatus {
+  Pending
+  Paid
+}
+
+// API label for OutForDelivery is "Out for Delivery" (see src/utils/serializers.js)
+enum OrderStatus {
+  Placed
+  Confirmed
+  Packed
+  OutForDelivery
+  Delivered
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  cart   Cart?
+  orders Order[]
+
+  @@map("users")
+}
+
+model Product {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String   @default("")
+  category    Category
+  price       Decimal  @db.Decimal(10, 2) // INR per one `unit`
+  imageUrl    String   @default("") @map("image_url")
+  stock       Int      @default(0) // CHECK (stock >= 0) is added in the migration
+  unit        Unit
+  aliases     String[]
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  cartItems  CartItem[]
+  orderItems OrderItem[]
+
+  @@index([category, name])
+  @@map("products")
+}
+
+model Cart {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid // one cart per user
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+
+  @@map("carts")
+}
+
+model CartItem {
+  id        String @id @default(uuid()) @db.Uuid
+  cartId    String @map("cart_id") @db.Uuid
+  productId String @map("product_id") @db.Uuid
+  quantity  Int // CHECK (quantity BETWEEN 1 AND 99) is added in the migration
+  createdAt DateTime @default(now()) @map("created_at")
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, productId])
+  @@map("cart_items")
+}
+
+model Order {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @map("user_id") @db.Uuid
+  totalAmount    Decimal       @map("total_amount") @db.Decimal(10, 2)
+  status         OrderStatus   @default(Placed)
+  paymentMethod  PaymentMethod @default(COD) @map("payment_method")
+  paymentStatus  PaymentStatus @default(Pending) @map("payment_status")
+  idempotencyKey String?       @map("idempotency_key")
+
+  // delivery address (was an embedded sub-document in Mongo)
+  deliveryFullName String @map("delivery_full_name")
+  deliveryPhone    String @map("delivery_phone")
+  deliveryLine1    String @map("delivery_line1")
+  deliveryLine2    String @default("") @map("delivery_line2")
+  deliveryCity     String @map("delivery_city")
+  deliveryState    String @map("delivery_state")
+  deliveryPincode  String @map("delivery_pincode")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user  User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items OrderItem[]
+
+  // Postgres allows many NULLs in a unique index, so orders without a key are unaffected.
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String  @id @default(uuid()) @db.Uuid
+  orderId   String  @map("order_id") @db.Uuid
+  productId String  @map("product_id") @db.Uuid
+  name      String // snapshot at purchase time
+  unit      Unit // snapshot
+  unitPrice Decimal @map("unit_price") @db.Decimal(10, 2) // snapshot: later price changes never alter old orders
+  quantity  Int
+  lineTotal Decimal @map("line_total") @db.Decimal(10, 2)
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}

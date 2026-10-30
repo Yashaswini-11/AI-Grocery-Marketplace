@@ -1,5 +1,5 @@
-const Order = require('../models/Order');
-const Product = require('../models/Product');
+const { prisma } = require('../config/db');
+const { productSummary } = require('../utils/serializers');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_PURCHASES = 3; // distinct purchases needed before we estimate anything
@@ -23,34 +23,23 @@ function daysText(n) {
   return `${d} day${d === 1 ? '' : 's'}`;
 }
 
-function toSummary(p) {
-  return {
-    id: p._id.toString(),
-    name: p.name,
-    category: p.category,
-    unit: p.unit,
-    price: p.price,
-    stock: p.stock,
-    imageUrl: p.imageUrl,
-  };
-}
-
 // productId -> [{ date, quantity }] built from the user's real orders
 async function loadHistory(userId) {
-  const orders = await Order.find({ user: userId })
-    .select('items createdAt')
-    .sort({ createdAt: 1 })
-    .lean();
+  const [orderCount, rows] = await Promise.all([
+    prisma.order.count({ where: { userId } }),
+    prisma.orderItem.findMany({
+      where: { order: { userId } },
+      select: { productId: true, quantity: true, order: { select: { createdAt: true } } },
+      orderBy: { order: { createdAt: 'asc' } },
+    }),
+  ]);
 
   const byProduct = new Map();
-  for (const order of orders) {
-    for (const item of order.items) {
-      const key = item.product.toString();
-      if (!byProduct.has(key)) byProduct.set(key, []);
-      byProduct.get(key).push({ date: order.createdAt, quantity: item.quantity });
-    }
+  for (const row of rows) {
+    if (!byProduct.has(row.productId)) byProduct.set(row.productId, []);
+    byProduct.get(row.productId).push({ date: row.order.createdAt, quantity: row.quantity });
   }
-  return { orderCount: orders.length, byProduct };
+  return { orderCount, byProduct };
 }
 
 // Purchases less than a day apart are one shopping trip
@@ -142,8 +131,8 @@ async function getReorderSuggestions(userId, now = new Date()) {
     };
   }
 
-  const products = await Product.find({ _id: { $in: [...byProduct.keys()] } }).lean();
-  const productMap = new Map(products.map((p) => [p._id.toString(), p]));
+  const products = await prisma.product.findMany({ where: { id: { in: [...byProduct.keys()] } } });
+  const productMap = new Map(products.map((p) => [p.id, p]));
 
   const restock = [];
   const upcoming = [];
@@ -157,7 +146,7 @@ async function getReorderSuggestions(userId, now = new Date()) {
     const lastTrip = trips[trips.length - 1];
 
     recent.push({
-      product: toSummary(product),
+      product: productSummary(product),
       lastPurchasedAt: lastTrip.date,
       timesPurchased: trips.length,
       lastQuantity: clamp(lastTrip.quantity, 1, 99),
@@ -168,7 +157,7 @@ async function getReorderSuggestions(userId, now = new Date()) {
 
     const { daysSinceLast, ...fields } = analysis;
     const entry = {
-      product: toSummary(product),
+      product: productSummary(product),
       ...fields,
       explanation: explain(analysis),
     };
