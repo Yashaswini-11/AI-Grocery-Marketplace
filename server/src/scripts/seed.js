@@ -88,16 +88,16 @@ async function seed() {
     console.log(`Reset: seeded ${created.count} products`);
   } else {
     // Safe sync: adds missing products, updates the others, never touches existing stock.
+    // Each product is its own small write, so a slow remote database cannot hit a transaction
+    // time limit. Re-running is always safe: a product that already exists is simply updated.
     const before = await prisma.product.count();
-    await prisma.$transaction(
-      products.map(({ stock, ...rest }) =>
-        prisma.product.upsert({
-          where: { name: rest.name },
-          update: rest,
-          create: { ...rest, stock },
-        })
-      )
-    );
+    for (const { stock, ...rest } of products) {
+      await prisma.product.upsert({
+        where: { name: rest.name },
+        update: rest,
+        create: { ...rest, stock },
+      });
+    }
     const after = await prisma.product.count();
     console.log(`Catalog synced: ${after - before} added, ${products.length} checked (existing stock kept)`);
   }
