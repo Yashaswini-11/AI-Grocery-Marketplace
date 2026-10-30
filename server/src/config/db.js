@@ -16,8 +16,15 @@ function withoutSslMode(url) {
 }
 
 // One shared client for the whole process (it manages its own connection pool).
+//
+// Pool settings suit serverless databases such as Neon, which suspend after a few idle minutes:
+// idle connections are closed early (before the database sleeps), and the first request after a
+// sleep gets up to 20 seconds to wake the database instead of failing straight away.
 const adapter = new PrismaPg({
   connectionString: withoutSslMode(databaseUrl),
+  max: 5,
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 20000,
   ...(databaseSsl ? { ssl: { rejectUnauthorized: false } } : {}),
 });
 const prisma = new PrismaClient({ adapter });
